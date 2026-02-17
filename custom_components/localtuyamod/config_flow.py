@@ -8,6 +8,7 @@ import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant import config_entries, core, exceptions
+from homeassistant.components.light import CONF_BRIGHTNESS, CONF_COLOR_TEMP
 from homeassistant.const import (
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
@@ -32,13 +33,20 @@ from .const import (
     ATTR_UPDATED_AT,
     CONF_ACTION,
     CONF_ADD_DEVICE,
+    CONF_COMMANDS_SET,
     CONF_DPS_STRINGS,
     CONF_EDIT_DEVICE,
+    CONF_ENABLE_ADD_ENTITIES,
     CONF_ENABLE_DEBUG,
+    CONF_FAN_SPEED_CONTROL,
     CONF_LOCAL_KEY,
     CONF_MANUAL_DPS,
+    CONF_MAX_VALUE,
+    CONF_MIN_VALUE,
     CONF_MODEL,
     CONF_NO_CLOUD,
+    CONF_OPTIONS,
+    CONF_OPTIONS_FRIENDLY,
     CONF_PASSIVE_ENTITY,
     CONF_PRODUCT_NAME,
     CONF_PROTOCOL_VERSION,
@@ -48,13 +56,14 @@ from .const import (
     CONF_SETUP_CLOUD,
     CONF_STATE_OFF,
     CONF_STATE_ON,
+    CONF_STEPSIZE_VALUE,
     CONF_USER_ID,
-    CONF_ENABLE_ADD_ENTITIES,
     DATA_CLOUD,
     DATA_DISCOVERY,
     DOMAIN,
     PLATFORMS,
 )
+
 from .discovery import discover
 
 _LOGGER = logging.getLogger(__name__)
@@ -140,9 +149,11 @@ def bulk_default_name(dp_string: str, dp_id: int) -> str:
 
     return label
 
+def parse_dp_id(v) -> int:
+    return int(str(v).split(" ")[0].rstrip(":"))
 
 
-def bulk_select_dps_schema(dps_strings, selected=None):
+def bulk_select_dps_schema(dps_strings, selected=None, config=None):
     schema = {
         vol.Required(
             BULK_SELECTED_DPS,
@@ -150,71 +161,179 @@ def bulk_select_dps_schema(dps_strings, selected=None):
         ): cv.multi_select({dp: dp for dp in dps_strings})
     }
 
+    config = config or {}
+
     if selected:
         for dp_string in selected:
-            dp_id_raw = str(dp_string).split(" ")[0].rstrip(":")
             try:
-                dp_id = int(dp_id_raw)
+                dp_id = parse_dp_id(dp_string)
             except ValueError:
                 continue
 
+            platform_key = bulk_dp_key(dp_id, "platform")
+            default_platform = config.get(platform_key, "switch")
+
             schema[
                 vol.Required(
-                    bulk_dp_key(dp_id, "platform"),
-                    default="switch",
+                    platform_key,
+                    default=default_platform,
                 )
-            ] = vol.In(["switch", "sensor", "binary_sensor"])
+            ] = vol.In(["switch", "sensor", "binary_sensor", "light", "number", "select", "cover", "fan"])
 
             schema[
                 vol.Required(
                     bulk_dp_key(dp_id, "name"),
-                    default=bulk_default_name(str(dp_string), dp_id),
+                    default=config.get(
+                        bulk_dp_key(dp_id, "name"),
+                        bulk_default_name(str(dp_string), dp_id),
+                    ),
                 )
             ] = str
 
-            schema[
-                vol.Required(
-                    bulk_dp_key(dp_id, "state_on"),
-                    default="True",
-                )
-            ] = str
+            if default_platform == "switch":
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "restore_on_reconnect"),
+                        default=config.get(
+                            bulk_dp_key(dp_id, "restore_on_reconnect"), False
+                        ),
+                    )
+                ] = bool
 
-            schema[
-                vol.Required(
-                    bulk_dp_key(dp_id, "state_off"),
-                    default="False",
-                )
-            ] = str
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "passive_entity"),
+                        default=config.get(bulk_dp_key(dp_id, "passive_entity"), False),
+                    )
+                ] = bool
 
-            schema[
-                vol.Optional(
-                    bulk_dp_key(dp_id, "unit")
-                )
-            ] = str
+            if default_platform == "binary_sensor":
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "state_on"),
+                        default=config.get(bulk_dp_key(dp_id, "state_on"), "True"),
+                    )
+                ] = str
 
-            schema[
-                vol.Optional(
-                    bulk_dp_key(dp_id, "scaling"),
-                    default=1.0,
-                )
-            ] = vol.All(vol.Coerce(float), vol.Range(min=-1000000.0, max=1000000.0))
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "state_off"),
+                        default=config.get(bulk_dp_key(dp_id, "state_off"), "False"),
+                    )
+                ] = str
 
-            schema[
-                vol.Required(
-                    bulk_dp_key(dp_id, "restore_on_reconnect"),
-                    default=False,
-                )
-            ] = bool
+            if default_platform == "sensor":
+                schema[
+                    vol.Optional(
+                        bulk_dp_key(dp_id, "unit"),
+                        description={
+                            "suggested_value": config.get(bulk_dp_key(dp_id, "unit"))
+                        },
+                    )
+                ] = str
 
-            schema[
-                vol.Required(
-                    bulk_dp_key(dp_id, "passive_entity"),
-                    default=False,
+                schema[
+                    vol.Optional(
+                        bulk_dp_key(dp_id, "scaling"),
+                        default=config.get(bulk_dp_key(dp_id, "scaling"), 1.0),
+                    )
+                ] = vol.All(
+                    vol.Coerce(float), vol.Range(min=-1000000.0, max=1000000.0)
                 )
-            ] = bool
 
+            if default_platform == "light":
+                schema[
+                    vol.Optional(
+                        bulk_dp_key(dp_id, "brightness"),
+                        description={
+                            "suggested_value": config.get(bulk_dp_key(dp_id, "brightness"))
+                        },
+                    )
+                ] = vol.In(dps_strings)
+
+                schema[
+                    vol.Optional(
+                        bulk_dp_key(dp_id, "color_temp"),
+                        description={
+                            "suggested_value": config.get(bulk_dp_key(dp_id, "color_temp"))
+                        },
+                    )
+                ] = vol.In(dps_strings)
+
+            if default_platform == "number":
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "min"),
+                        default=config.get(bulk_dp_key(dp_id, "min"), 0.0),
+                    )
+                ] = vol.Coerce(float)
+
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "max"),
+                        default=config.get(bulk_dp_key(dp_id, "max"), 100.0),
+                    )
+                ] = vol.Coerce(float)
+
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "step"),
+                        default=config.get(bulk_dp_key(dp_id, "step"), 1.0),
+                    )
+                ] = vol.Coerce(float)
+
+                schema[
+                    vol.Optional(
+                        bulk_dp_key(dp_id, "scaling"),
+                        default=config.get(bulk_dp_key(dp_id, "scaling"), 1.0),
+                    )
+                ] = vol.All(
+                    vol.Coerce(float), vol.Range(min=-1000000.0, max=1000000.0)
+                )
+
+            if default_platform == "select":
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "options"),
+                        default=config.get(bulk_dp_key(dp_id, "options"), ""),
+                    )
+                ] = str
+
+                schema[
+                    vol.Optional(
+                        bulk_dp_key(dp_id, "options_friendly"),
+                        description={
+                            "suggested_value": config.get(
+                                bulk_dp_key(dp_id, "options_friendly")
+                            )
+                        },
+                    )
+                ] = str
+
+            if default_platform == "cover":
+                schema[
+                    vol.Required(
+                        bulk_dp_key(dp_id, "commands_set"),
+                        default=config.get(
+                            bulk_dp_key(dp_id, "commands_set"), "on_off_stop"
+                        ),
+                    )
+                ] = vol.In(["on_off_stop", "open_close_stop", "fz_zz_stop", "1_2_3"])
+
+            if default_platform == "fan":
+                schema[
+                    vol.Optional(
+                        bulk_dp_key(dp_id, "fan_speed_control"),
+                        description={
+                            "suggested_value": config.get(
+                                bulk_dp_key(dp_id, "fan_speed_control")
+                            )
+                        },
+                    )
+                ] = vol.In(dps_strings)
 
     return vol.Schema(schema)
+
 
 
 
@@ -506,18 +625,21 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for LocalTuya integration."""
 
     def __init__(self, config_entry):
-        """Initialize localtuya options flow."""
-        self._config_entry = config_entry
-        # self.dps_strings = config_entry.data.get(CONF_DPS_STRINGS, gen_dps_strings())
-        # self.entities = config_entry.data[CONF_ENTITIES]
-        self.selected_device = None
-        self.editing_device = False
-        self.device_data = None
-        self.dps_strings = []
-        self.selected_platform = None
-        self.discovered_devices = {}
-        self.entities = []
-        self.bulk_selected_dps = []
+            """Initialize localtuya options flow."""
+            self._config_entry = config_entry
+            # self.dps_strings = config_entry.data.get(CONF_DPS_STRINGS, gen_dps_strings())
+            # self.entities = config_entry.data[CONF_ENTITIES]
+            self.selected_device = None
+            self.editing_device = False
+            self.device_data = None
+            self.dps_strings = []
+            self.selected_platform = None
+            self.discovered_devices = {}
+            self.entities = []
+            self.bulk_selected_dps = []
+            self.bulk_entities_config = {}
+            self.bulk_rendered_platforms = {}
+
 
     async def async_step_init(self, user_input=None):
         """Manage basic options."""
@@ -817,6 +939,31 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_bulk_select_dps(self, user_input=None):
         errors = {}
 
+        def _show_form(config=None):
+            # Track which platforms were rendered with extra fields
+            self.bulk_rendered_platforms = {}
+            cfg = config or {}
+
+            for dp_string in self.bulk_selected_dps:
+                try:
+                    dp_id = parse_dp_id(dp_string)
+                except ValueError:
+                    continue
+
+                self.bulk_rendered_platforms[dp_id] = cfg.get(
+                    bulk_dp_key(dp_id, "platform"), "switch"
+                )
+
+            return self.async_show_form(
+                step_id="bulk_select_dps",
+                data_schema=bulk_select_dps_schema(
+                    self.dps_strings,
+                    selected=self.bulk_selected_dps,
+                    config=config,
+                ),
+                errors={},
+            )
+
         if user_input is not None:
             selected = user_input.get(BULK_SELECTED_DPS, {})
             if isinstance(selected, dict):
@@ -824,27 +971,46 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
             else:
                 self.bulk_selected_dps = list(selected)
 
-            # если платформа-поля ещё не присутствуют — значит это первый submit,
-            # просто перерисовать форму с расширенной схемой
-            if not any("dp_" in key for key in user_input.keys()):
-                return self.async_show_form(
-                    step_id="bulk_select_dps",
-                    data_schema=bulk_select_dps_schema(
-                        self.dps_strings,
-                        selected=self.bulk_selected_dps,
-                    ),
-                    errors={},
-                )
+            # 1st submit: only DP selection, no per-DP fields yet
+            if not any(str(key).startswith("dp_") for key in user_input.keys()):
+                return _show_form()
 
-            # иначе это финальный submit → сохраняем пер-DP настройки
+            # If user changed any platform in the UI, re-render to show per-platform fields.
+            rendered = getattr(self, "bulk_rendered_platforms", {}) or {}
+            for key, value in user_input.items():
+                if not isinstance(key, str):
+                    continue
+                if not key.startswith("dp_") or not key.endswith("_platform"):
+                    continue
+
+                parts = key.split("_")
+                if len(parts) < 3:
+                    continue
+
+                try:
+                    dp_id = int(parts[1])
+                except ValueError:
+                    continue
+
+                prev = rendered.get(dp_id, "switch")
+                if value != prev:
+                    return _show_form(config=user_input)
+
+            # Final submit: store per-DP config and create entities
             self.bulk_entities_config = user_input
             return await self.async_step_bulk_create_entities()
+
+        # initial render
+        self.bulk_selected_dps = []
+        self.bulk_entities_config = {}
+        self.bulk_rendered_platforms = {}
 
         return self.async_show_form(
             step_id="bulk_select_dps",
             data_schema=bulk_select_dps_schema(self.dps_strings),
             errors=errors,
         )
+
 
 
     async def async_step_bulk_create_entities(self, user_input=None):
@@ -863,12 +1029,11 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
             platform = cfg.get(bulk_dp_key(dp_id, "platform"), "switch")
             name = cfg.get(bulk_dp_key(dp_id, "name"), f"DP {dp_id}")
 
-            if platform not in ("switch", "sensor", "binary_sensor"):
+            if platform not in ["switch", "sensor", "binary_sensor", "light", "number", "select", "cover", "fan"]:
                 continue
 
             if not name:
                 name = bulk_default_name(str(selected), dp_id)
-
 
             entity = {
                 CONF_ID: dp_id,
@@ -884,7 +1049,6 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
                     cfg.get(bulk_dp_key(dp_id, "passive_entity"), False)
                 )
 
-
             if platform == "binary_sensor":
                 entity[CONF_STATE_ON] = cfg.get(bulk_dp_key(dp_id, "state_on"), "True")
                 entity[CONF_STATE_OFF] = cfg.get(bulk_dp_key(dp_id, "state_off"), "False")
@@ -897,6 +1061,50 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
                 scaling = cfg.get(bulk_dp_key(dp_id, "scaling"))
                 if scaling is not None:
                     entity[CONF_SCALING] = scaling
+
+            if platform == "light":
+                brightness = cfg.get(bulk_dp_key(dp_id, "brightness"))
+                if brightness:
+                    entity[CONF_BRIGHTNESS] = parse_dp_id(brightness)
+
+                color_temp = cfg.get(bulk_dp_key(dp_id, "color_temp"))
+                if color_temp:
+                    entity[CONF_COLOR_TEMP] = parse_dp_id(color_temp)
+
+            if platform == "number":
+                min_v = cfg.get(bulk_dp_key(dp_id, "min"))
+                if min_v is not None:
+                    entity[CONF_MIN_VALUE] = min_v
+
+                max_v = cfg.get(bulk_dp_key(dp_id, "max"))
+                if max_v is not None:
+                    entity[CONF_MAX_VALUE] = max_v
+
+                step = cfg.get(bulk_dp_key(dp_id, "step"))
+                if step is not None:
+                    entity[CONF_STEPSIZE_VALUE] = step
+
+                scaling = cfg.get(bulk_dp_key(dp_id, "scaling"))
+                if scaling is not None:
+                    entity[CONF_SCALING] = scaling
+
+            if platform == "select":
+                # options string, e.g. "auto;cool;heat"
+                entity[CONF_OPTIONS] = str(cfg.get(bulk_dp_key(dp_id, "options"), ""))
+
+                options_friendly = cfg.get(bulk_dp_key(dp_id, "options_friendly"))
+                if options_friendly:
+                    entity[CONF_OPTIONS_FRIENDLY] = str(options_friendly)
+
+            if platform == "cover":
+                entity[CONF_COMMANDS_SET] = str(
+                    cfg.get(bulk_dp_key(dp_id, "commands_set"), "on_off_stop")
+                )
+
+            if platform == "fan":
+                speed_dp = cfg.get(bulk_dp_key(dp_id, "fan_speed_control"))
+                if speed_dp:
+                    entity[CONF_FAN_SPEED_CONTROL] = parse_dp_id(speed_dp)
 
             self.entities.append(entity)
 
@@ -919,136 +1127,3 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
 
         return self.async_create_entry(title="", data={})
 
-
-    def available_dps_strings(self):
-        """Return list of DPs use by the device's entities."""
-        available_dps = []
-        used_dps = [str(entity[CONF_ID]) for entity in self.entities]
-        for dp_string in self.dps_strings:
-            dp = dp_string.split(" ")[0]
-            if dp not in used_dps:
-                available_dps.append(dp_string)
-        return available_dps
-
-    async def async_step_entity(self, user_input=None):
-        """Manage entity settings."""
-        errors = {}
-        if user_input is not None:
-            entity = strip_dps_values(user_input, self.dps_strings)
-            entity[CONF_ID] = self.current_entity[CONF_ID]
-            entity[CONF_PLATFORM] = self.current_entity[CONF_PLATFORM]
-            self.device_data[CONF_ENTITIES].append(entity)
-
-            if len(self.entities) == len(self.device_data[CONF_ENTITIES]):
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    title=self.device_data[CONF_FRIENDLY_NAME],
-                    data=self.device_data,
-                )
-                return self.async_create_entry(title="", data={})
-
-        schema = platform_schema(
-            self.current_entity[CONF_PLATFORM], self.dps_strings, allow_id=False
-        )
-        return self.async_show_form(
-            step_id="entity",
-            errors=errors,
-            data_schema=schema_defaults(
-                schema, self.dps_strings, **self.current_entity
-            ),
-            description_placeholders={
-                "id": self.current_entity[CONF_ID],
-                "platform": self.current_entity[CONF_PLATFORM],
-            },
-        )
-
-    async def async_step_configure_entity(self, user_input=None):
-        """Manage entity settings."""
-        errors = {}
-        if user_input is not None:
-            if self.editing_device:
-                entity = strip_dps_values(user_input, self.dps_strings)
-                entity[CONF_ID] = self.current_entity[CONF_ID]
-                entity[CONF_PLATFORM] = self.current_entity[CONF_PLATFORM]
-                self.device_data[CONF_ENTITIES].append(entity)
-
-                if len(self.entities) == len(self.device_data[CONF_ENTITIES]):
-                    # finished editing device. Let's store the new config entry....
-                    dev_id = self.device_data[CONF_DEVICE_ID]
-                    new_data = self.config_entry.data.copy()
-                    entry_id = self.config_entry.entry_id
-                    # removing entities from registry (they will be recreated)
-                    ent_reg = er.async_get(self.hass)
-                    reg_entities = {
-                        ent.unique_id: ent.entity_id
-                        for ent in er.async_entries_for_config_entry(ent_reg, entry_id)
-                        if dev_id in ent.unique_id
-                    }
-                    for entity_id in reg_entities.values():
-                        ent_reg.async_remove(entity_id)
-
-                    new_data[CONF_DEVICES][dev_id] = self.device_data
-                    new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
-                    self.hass.config_entries.async_update_entry(
-                        self.config_entry,
-                        data=new_data,
-                    )
-                    return self.async_create_entry(title="", data={})
-            else:
-                user_input[CONF_PLATFORM] = self.selected_platform
-                self.entities.append(strip_dps_values(user_input, self.dps_strings))
-                # new entity added. Let's check if there are more left...
-                user_input = None
-                if len(self.available_dps_strings()) == 0:
-                    user_input = {NO_ADDITIONAL_ENTITIES: True}
-                return await self.async_step_pick_entity_type(user_input)
-
-        if self.editing_device:
-            schema = platform_schema(
-                self.current_entity[CONF_PLATFORM], self.dps_strings, allow_id=False
-            )
-            schema = schema_defaults(schema, self.dps_strings, **self.current_entity)
-            placeholders = {
-                "entity": f"entity with DP {self.current_entity[CONF_ID]}",
-                "platform": self.current_entity[CONF_PLATFORM],
-            }
-        else:
-            available_dps = self.available_dps_strings()
-            schema = platform_schema(self.selected_platform, available_dps)
-            placeholders = {
-                "entity": "an entity",
-                "platform": self.selected_platform,
-            }
-
-        return self.async_show_form(
-            step_id="configure_entity",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders=placeholders,
-        )
-
-    async def async_step_yaml_import(self, user_input=None):
-        """Manage YAML imports."""
-        _LOGGER.error(
-            "Configuration via YAML file is no longer supported by this integration."
-        )
-        # if user_input is not None:
-        #     return self.async_create_entry(title="", data={})
-        # return self.async_show_form(step_id="yaml_import")
-
-    @property
-    def current_entity(self):
-        """Existing configuration for entity currently being edited."""
-        return self.entities[len(self.device_data[CONF_ENTITIES])]
-
-
-class CannotConnect(exceptions.HomeAssistantError):
-    """Error to indicate we cannot connect."""
-
-
-class InvalidAuth(exceptions.HomeAssistantError):
-    """Error to indicate there is invalid auth."""
-
-
-class EmptyDpsList(exceptions.HomeAssistantError):
-    """Error to indicate no datapoints found."""
