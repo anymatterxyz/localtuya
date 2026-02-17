@@ -15,16 +15,25 @@ from homeassistant.const import (
     CONF_FRIENDLY_NAME,
     CONF_HOST,
     CONF_ID,
-    CONF_LOCAL_KEY,
     CONF_MODEL,
     CONF_NAME,
     CONF_PROTOCOL_VERSION,
     CONF_REGION,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
-    CONF_BRIGHTNESS,
-    CONF_COLOR_TEMP,
 )
+
+# LocalTuya keys must come from integration const, not HA const.
+from .const import CONF_LOCAL_KEY
+
+# Some HA versions moved light config keys around. Keep config_flow import-safe.
+try:
+    from homeassistant.const import CONF_BRIGHTNESS, CONF_COLOR_TEMP, CONF_SCENE
+except Exception:
+    CONF_BRIGHTNESS = "brightness"
+    CONF_COLOR_TEMP = "color_temp"
+    CONF_SCENE = "scene"
+
 from homeassistant.core import callback
 
 from .cloud_api import TuyaCloudApi
