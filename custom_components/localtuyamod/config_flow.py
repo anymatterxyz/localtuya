@@ -8,22 +8,22 @@ import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant import config_entries, core, exceptions
-from homeassistant.components.light import CONF_BRIGHTNESS, CONF_COLOR_TEMP
 from homeassistant.const import (
-    CONF_CLIENT_ID,
-    CONF_CLIENT_SECRET,
     CONF_DEVICE_ID,
     CONF_DEVICES,
-    CONF_ENTITIES,
+    CONF_ENTITY_ID,
     CONF_FRIENDLY_NAME,
     CONF_HOST,
     CONF_ID,
+    CONF_LOCAL_KEY,
+    CONF_MODEL,
     CONF_NAME,
-    CONF_PLATFORM,
+    CONF_PROTOCOL_VERSION,
     CONF_REGION,
     CONF_SCAN_INTERVAL,
-    CONF_UNIT_OF_MEASUREMENT,
     CONF_USERNAME,
+    CONF_BRIGHTNESS,
+    CONF_COLOR_TEMP,
 )
 from homeassistant.core import callback
 
