@@ -30,6 +30,7 @@ from homeassistant.core import callback
 from .cloud_api import TuyaCloudApi
 from .common import pytuya
 from .const import (
+    DOMAIN,
     ATTR_UPDATED_AT,
     CONF_ACTION,
     CONF_ADD_DEVICE,
@@ -60,7 +61,6 @@ from .const import (
     CONF_USER_ID,
     DATA_CLOUD,
     DATA_DISCOVERY,
-    DOMAIN,
     PLATFORMS,
 )
 
@@ -561,6 +561,7 @@ async def attempt_cloud_connection(hass, user_input):
 
 class LocaltuyaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for LocalTuya integration."""
+
 
     VERSION = ENTRIES_VERSION
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
