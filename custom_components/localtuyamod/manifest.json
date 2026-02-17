@@ -1,6 +1,6 @@
 {
-  "domain": "localtuya",
-  "name": "LocalTuya integration",
+  "domain": "localtuyamod",
+  "name": "LocalTuya Mod",
   "codeowners": [
     "@rospogrigio", "@postlund"
   ],
