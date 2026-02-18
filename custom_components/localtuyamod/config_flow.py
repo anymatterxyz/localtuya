@@ -649,84 +649,6 @@ class LocaltuyaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         """Initialize a new LocaltuyaConfigFlow."""
 
-    async def async_step_import_json(self, user_input=None):
-        errors = {}
-
-    async def _read_text(rel_path: str) -> str:
-        rel_path = (rel_path or "").strip()
-        if not rel_path:
-            raise ValueError("Empty path")
-
-        p = Path(rel_path)
-        # block absolute paths / traversal
-        if p.is_absolute() or ".." in p.parts:
-            raise ValueError("Path must be relative to /config")
-
-        full_path = self.hass.config.path(rel_path)
-        return await self.hass.async_add_executor_job(
-            lambda: Path(full_path).read_text(encoding="utf-8")
-        )
-
-    if user_input is not None:
-        try:
-            raw = await _read_text(user_input[CONF_IMPORT_FILE])
-            objs = _json_load_many(raw)
-
-            imported_raw = {}
-            for obj in objs:
-                imported_raw.update(_extract_devices_map(obj))
-
-            if not imported_raw:
-                raise ValueError("No devices found in JSON")
-
-            imported = {}
-            skipped = 0
-            for dev_id_key, dev in imported_raw.items():
-                norm = _normalize_device_config(dev_id_key, dev)
-                if norm is None:
-                    skipped += 1
-                    continue
-                imported[norm[CONF_DEVICE_ID]] = norm
-
-            if not imported:
-                raise ValueError("All devices were invalid (missing host/local_key/device_id?)")
-
-            new_data = self.config_entry.data.copy()
-            existing = dict(new_data.get(CONF_DEVICES, {}))
-
-            if user_input.get(CONF_IMPORT_MODE) == IMPORT_MODE_REPLACE:
-                existing = {}
-
-            existing.update(imported)
-            new_data[CONF_DEVICES] = existing
-            new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
-
-            self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
-
-            _LOGGER.info(
-                "JSON import done: added/updated %s devices, skipped %s",
-                len(imported),
-                skipped,
-            )
-
-            self.hass.async_create_task(
-                self.hass.config_entries.async_reload(self.config_entry.entry_id)
-            )
-
-            return self.async_create_entry(title="", data={})
-
-        except Exception as ex:
-            _LOGGER.exception("JSON import failed: %s", ex)
-            errors["base"] = "unknown"  # будет текст из strings.json: "An unknown error occurred. See log..."
-            # да, это не идеально, но зато не лезем править переводы сейчас.
-
-    return self.async_show_form(
-        step_id="import_json",
-        data_schema=IMPORT_JSON_SCHEMA,
-        errors=errors,
-    )
-
-
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
         errors = {}
@@ -905,6 +827,82 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=devices_schema(
                 devices, self.hass.data[DOMAIN][DATA_CLOUD].device_list
             ),
+            errors=errors,
+        )
+
+
+    async def async_step_import_json(self, user_input=None):
+        errors = {}
+
+        async def _read_text(rel_path: str) -> str:
+            rel_path = (rel_path or "").strip()
+            if not rel_path:
+                raise ValueError("Empty path")
+
+            p = Path(rel_path)
+            if p.is_absolute() or ".." in p.parts:
+                raise ValueError("Path must be relative to /config")
+
+            full_path = self.hass.config.path(rel_path)
+            return await self.hass.async_add_executor_job(
+                lambda: Path(full_path).read_text(encoding="utf-8")
+            )
+
+        if user_input is not None:
+            try:
+                raw = await _read_text(user_input[CONF_IMPORT_FILE])
+                objs = _json_load_many(raw)
+
+                imported_raw = {}
+                for obj in objs:
+                    imported_raw.update(_extract_devices_map(obj))
+
+                if not imported_raw:
+                    raise ValueError("No devices found in JSON")
+
+                imported = {}
+                skipped = 0
+                for dev_id_key, dev in imported_raw.items():
+                    norm = _normalize_device_config(dev_id_key, dev)
+                    if norm is None:
+                        skipped += 1
+                        continue
+                    imported[norm[CONF_DEVICE_ID]] = norm
+
+                if not imported:
+                    raise ValueError("All devices were invalid (missing host/local_key/device_id?)")
+
+                new_data = self.config_entry.data.copy()
+                existing = dict(new_data.get(CONF_DEVICES, {}))
+
+                if user_input.get(CONF_IMPORT_MODE) == IMPORT_MODE_REPLACE:
+                    existing = {}
+
+                existing.update(imported)
+                new_data[CONF_DEVICES] = existing
+                new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
+
+                self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+
+                _LOGGER.info(
+                    "JSON import done: added/updated %s devices, skipped %s",
+                    len(imported),
+                    skipped,
+                )
+
+                self.hass.async_create_task(
+                    self.hass.config_entries.async_reload(self.config_entry.entry_id)
+                )
+
+                return self.async_create_entry(title="", data={})
+
+            except Exception as ex:
+                _LOGGER.exception("JSON import failed: %s", ex)
+                errors["base"] = "unknown"
+
+        return self.async_show_form(
+            step_id="import_json",
+            data_schema=IMPORT_JSON_SCHEMA,
             errors=errors,
         )
 
