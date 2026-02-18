@@ -794,6 +794,85 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_add_device(self, user_input=None):
         """Handle adding a new device."""
+        self.editing_device = False
+        self.selected_device = None
+        errors = {}
+
+        if user_input is not None:
+            if user_input[SELECTED_DEVICE] != CUSTOM_DEVICE:
+                self.selected_device = user_input[SELECTED_DEVICE]
+            return await self.async_step_configure_device()
+
+        # --- discovery (optional, mainly for getting IPs) ---
+        self.discovered_devices = {}
+        data = self.hass.data.get(DOMAIN)
+
+        if data and DATA_DISCOVERY in data:
+            self.discovered_devices = data[DATA_DISCOVERY].devices
+        else:
+            try:
+                self.discovered_devices = await discover()
+            except OSError as ex:
+                if ex.errno == errno.EADDRINUSE:
+                    errors["base"] = "address_in_use"
+                else:
+                    errors["base"] = "discovery_failed"
+            except Exception as ex:
+                _LOGGER.exception("discovery failed: %s", ex)
+                errors["base"] = "discovery_failed"
+
+        # already configured
+        configured = set(self.config_entry.data.get(CONF_DEVICES, {}).keys())
+
+        # discovery map: dev_id -> ip (dev_id here is usually gwId)
+        discovered_map = {}
+        for _k, dev in (self.discovered_devices or {}).items():
+            gwid = dev.get("gwId")
+            ip = dev.get("ip")
+            if gwid and ip:
+                discovered_map[gwid] = ip
+
+        # --- cloud devices (main list for dropdown) ---
+        cloud_devs = {}
+        if self.hass.data.get(DOMAIN) and DATA_CLOUD in self.hass.data[DOMAIN]:
+            cloud_devs = self.hass.data[DOMAIN][DATA_CLOUD].device_list or {}
+
+        devices = {}
+
+        if cloud_devs:
+            # build list primarily from cloud, use discovery IP if available
+            for dev_id, dev in cloud_devs.items():
+                if dev_id in configured:
+                    continue
+
+                ip = None
+                # try common fields
+                if isinstance(dev, dict):
+                    ip = dev.get("ip") or dev.get(CONF_HOST)
+
+                ip = ip or discovered_map.get(dev_id)
+
+                # we still include device even if ip is missing,
+                # user can fill it on the next step
+                devices[dev_id] = ip or ""
+        else:
+            # no cloud: fallback to discovery only
+            for dev_id, ip in discovered_map.items():
+                if dev_id in configured:
+                    continue
+                devices[dev_id] = ip
+
+        return self.async_show_form(
+            step_id="add_device",
+            data_schema=devices_schema(
+                devices,
+                cloud_devs,
+            ),
+            errors=errors,
+        )
+
+
+        """Handle adding a new device."""
         # Use cache if available or fallback to manual discovery
         self.editing_device = False
         self.selected_device = None
