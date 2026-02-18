@@ -9,54 +9,40 @@ import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import (
+    CONF_BRIGHTNESS,
+    CONF_CLIENT_ID,
+    CONF_CLIENT_SECRET,
+    CONF_COLOR_TEMP,
     CONF_DEVICE_ID,
     CONF_DEVICES,
-    CONF_ENTITY_ID,
+    CONF_ENTITIES,
     CONF_FRIENDLY_NAME,
     CONF_HOST,
     CONF_ID,
-    CONF_MODEL,
     CONF_NAME,
-    CONF_PROTOCOL_VERSION,
+    CONF_PLATFORM,
     CONF_REGION,
     CONF_SCAN_INTERVAL,
+    CONF_UNIT_OF_MEASUREMENT,
     CONF_USERNAME,
 )
-
-# LocalTuya keys must come from integration const, not HA const.
-from .const import CONF_LOCAL_KEY
-
-# Some HA versions moved light config keys around. Keep config_flow import-safe.
-try:
-    from homeassistant.const import CONF_BRIGHTNESS, CONF_COLOR_TEMP, CONF_SCENE
-except Exception:
-    CONF_BRIGHTNESS = "brightness"
-    CONF_COLOR_TEMP = "color_temp"
-    CONF_SCENE = "scene"
-
 from homeassistant.core import callback
 
 from .cloud_api import TuyaCloudApi
 from .common import pytuya
 from .const import (
-    DOMAIN,
     ATTR_UPDATED_AT,
     CONF_ACTION,
     CONF_ADD_DEVICE,
-    CONF_COMMANDS_SET,
     CONF_DPS_STRINGS,
     CONF_EDIT_DEVICE,
-    CONF_ENABLE_ADD_ENTITIES,
     CONF_ENABLE_DEBUG,
-    CONF_FAN_SPEED_CONTROL,
     CONF_LOCAL_KEY,
     CONF_MANUAL_DPS,
     CONF_MAX_VALUE,
     CONF_MIN_VALUE,
     CONF_MODEL,
     CONF_NO_CLOUD,
-    CONF_OPTIONS,
-    CONF_OPTIONS_FRIENDLY,
     CONF_PASSIVE_ENTITY,
     CONF_PRODUCT_NAME,
     CONF_PROTOCOL_VERSION,
@@ -68,11 +54,12 @@ from .const import (
     CONF_STATE_ON,
     CONF_STEPSIZE_VALUE,
     CONF_USER_ID,
+    CONF_ENABLE_ADD_ENTITIES,
     DATA_CLOUD,
     DATA_DISCOVERY,
+    DOMAIN,
     PLATFORMS,
 )
-
 from .discovery import discover
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,6 +70,7 @@ PLATFORM_TO_ADD = "platform_to_add"
 NO_ADDITIONAL_ENTITIES = "no_additional_entities"
 USE_BULK_UI = "use_bulk_ui"
 BULK_SELECTED_DPS = "bulk_selected_dps"
+BULK_PLATFORM = "bulk_platform"
 SELECTED_DEVICE = "selected_device"
 
 CUSTOM_DEVICE = "..."
@@ -187,14 +175,14 @@ def bulk_select_dps_schema(dps_strings, selected=None, config=None):
                     platform_key,
                     default=default_platform,
                 )
-            ] = vol.In(["switch", "sensor", "binary_sensor", "light", "number", "select", "cover", "fan"])
+            ] = vol.In(PLATFORMS)
 
             schema[
                 vol.Required(
                     bulk_dp_key(dp_id, "name"),
                     default=config.get(
                         bulk_dp_key(dp_id, "name"),
-                        bulk_default_name(str(dp_string), dp_id),
+                        bulk_default_name(str(dp_string), dp_id)
                     ),
                 )
             ] = str
@@ -203,9 +191,7 @@ def bulk_select_dps_schema(dps_strings, selected=None, config=None):
                 schema[
                     vol.Required(
                         bulk_dp_key(dp_id, "restore_on_reconnect"),
-                        default=config.get(
-                            bulk_dp_key(dp_id, "restore_on_reconnect"), False
-                        ),
+                        default=config.get(bulk_dp_key(dp_id, "restore_on_reconnect"), False),
                     )
                 ] = bool
 
@@ -235,9 +221,7 @@ def bulk_select_dps_schema(dps_strings, selected=None, config=None):
                 schema[
                     vol.Optional(
                         bulk_dp_key(dp_id, "unit"),
-                        description={
-                            "suggested_value": config.get(bulk_dp_key(dp_id, "unit"))
-                        },
+                        description={"suggested_value": config.get(bulk_dp_key(dp_id, "unit"))}
                     )
                 ] = str
 
@@ -246,48 +230,42 @@ def bulk_select_dps_schema(dps_strings, selected=None, config=None):
                         bulk_dp_key(dp_id, "scaling"),
                         default=config.get(bulk_dp_key(dp_id, "scaling"), 1.0),
                     )
-                ] = vol.All(
-                    vol.Coerce(float), vol.Range(min=-1000000.0, max=1000000.0)
-                )
+                ] = vol.All(vol.Coerce(float), vol.Range(min=-1000000.0, max=1000000.0))
 
             if default_platform == "light":
                 schema[
                     vol.Optional(
-                        bulk_dp_key(dp_id, "brightness"),
-                        description={
-                            "suggested_value": config.get(bulk_dp_key(dp_id, "brightness"))
-                        },
+                        f"brightness_dp_{dp_id}",
+                        description={"suggested_value": config.get(f"brightness_dp_{dp_id}")}
                     )
                 ] = vol.In(dps_strings)
 
                 schema[
                     vol.Optional(
-                        bulk_dp_key(dp_id, "color_temp"),
-                        description={
-                            "suggested_value": config.get(bulk_dp_key(dp_id, "color_temp"))
-                        },
+                        f"color_temp_dp_{dp_id}",
+                        description={"suggested_value": config.get(f"color_temp_dp_{dp_id}")}
                     )
                 ] = vol.In(dps_strings)
 
             if default_platform == "number":
                 schema[
-                    vol.Required(
+                    vol.Optional(
                         bulk_dp_key(dp_id, "min"),
-                        default=config.get(bulk_dp_key(dp_id, "min"), 0.0),
+                        description={"suggested_value": config.get(bulk_dp_key(dp_id, "min"))}
                     )
                 ] = vol.Coerce(float)
 
                 schema[
-                    vol.Required(
+                    vol.Optional(
                         bulk_dp_key(dp_id, "max"),
-                        default=config.get(bulk_dp_key(dp_id, "max"), 100.0),
+                        description={"suggested_value": config.get(bulk_dp_key(dp_id, "max"))}
                     )
                 ] = vol.Coerce(float)
 
                 schema[
-                    vol.Required(
+                    vol.Optional(
                         bulk_dp_key(dp_id, "step"),
-                        default=config.get(bulk_dp_key(dp_id, "step"), 1.0),
+                        description={"suggested_value": config.get(bulk_dp_key(dp_id, "step"))}
                     )
                 ] = vol.Coerce(float)
 
@@ -296,9 +274,7 @@ def bulk_select_dps_schema(dps_strings, selected=None, config=None):
                         bulk_dp_key(dp_id, "scaling"),
                         default=config.get(bulk_dp_key(dp_id, "scaling"), 1.0),
                     )
-                ] = vol.All(
-                    vol.Coerce(float), vol.Range(min=-1000000.0, max=1000000.0)
-                )
+                ] = vol.All(vol.Coerce(float), vol.Range(min=-1000000.0, max=1000000.0))
 
             if default_platform == "select":
                 schema[
@@ -342,7 +318,6 @@ def bulk_select_dps_schema(dps_strings, selected=None, config=None):
                 ] = vol.In(dps_strings)
 
     return vol.Schema(schema)
-
 
 
 
@@ -1073,11 +1048,11 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
                     entity[CONF_SCALING] = scaling
 
             if platform == "light":
-                brightness = cfg.get(bulk_dp_key(dp_id, "brightness"))
+                brightness = cfg.get(f"brightness_dp_{dp_id}")
                 if brightness:
                     entity[CONF_BRIGHTNESS] = parse_dp_id(brightness)
 
-                color_temp = cfg.get(bulk_dp_key(dp_id, "color_temp"))
+                color_temp = cfg.get(f"color_temp_dp_{dp_id}")
                 if color_temp:
                     entity[CONF_COLOR_TEMP] = parse_dp_id(color_temp)
 
@@ -1136,4 +1111,3 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
         )
 
         return self.async_create_entry(title="", data={})
-
