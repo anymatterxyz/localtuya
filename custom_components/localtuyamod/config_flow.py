@@ -98,7 +98,7 @@ CONF_ACTIONS = {
     CONF_ADD_DEVICE: "Add a new device",
     CONF_EDIT_DEVICE: "Edit a device",
     CONF_SETUP_CLOUD: "Reconfigure Cloud API account",
-    CONF_ACTIONS[CONF_IMPORT_JSON] = "Импорт устройств из JSON",
+    CONF_IMPORT_JSON: "Импорт устройств из JSON",
 }
 
 CONFIGURE_SCHEMA = vol.Schema(
