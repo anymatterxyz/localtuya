@@ -735,7 +735,8 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=...
+            data_schema=CONFIGURE_SCHEMA,
+            errors={},
         )
 
     async def async_step_cloud_setup(self, user_input=None):
