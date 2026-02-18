@@ -146,8 +146,18 @@ def bulk_default_name(dp_string: str, dp_id: int) -> str:
 
     return label
 
+
+
 def parse_dp_id(v) -> int:
-    return int(str(v).split(" ")[0].rstrip(":"))
+    """Accepts DP strings like '7:brightness', '7: brightness', '7 brightness', '7' and returns 7."""
+    if v is None:
+        raise ValueError("DP id is None")
+    s = str(v).strip()
+    m = re.match(r"^(\d+)", s)
+    if not m:
+        raise ValueError(f"Cannot parse dp id from: {v!r}")
+    return int(m.group(1))
+
 
 
 def bulk_select_dps_schema(dps_strings, selected=None, config=None):
@@ -1005,9 +1015,8 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
         cfg = getattr(self, "bulk_entities_config", {}) or {}
 
         for selected in self.bulk_selected_dps:
-            dp_id_raw = str(selected).split(" ")[0].rstrip(":")
             try:
-                dp_id = int(dp_id_raw)
+                dp_id = parse_dp_id(selected)
             except ValueError:
                 continue
 
