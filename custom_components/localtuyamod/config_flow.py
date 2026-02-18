@@ -650,7 +650,7 @@ class LocaltuyaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize a new LocaltuyaConfigFlow."""
 
     async def async_step_import_json(self, user_input=None):
-    errors = {}
+        errors = {}
 
     async def _read_text(rel_path: str) -> str:
         rel_path = (rel_path or "").strip()
