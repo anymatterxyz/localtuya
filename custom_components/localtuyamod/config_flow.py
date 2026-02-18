@@ -1,10 +1,11 @@
-"""Config flow for LocalTuya integration integration."""
+"""Config flow for LocalTuyaMod integration."""
+
 import errno
+import json
 import logging
+import re
 import time
 from importlib import import_module
-import json
-import re
 from pathlib import Path
 
 import homeassistant.helpers.config_validation as cv
@@ -12,10 +13,8 @@ import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import (
-    CONF_BRIGHTNESS,
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
-    CONF_COLOR_TEMP,
     CONF_DEVICE_ID,
     CONF_DEVICES,
     CONF_ENTITIES,
@@ -39,6 +38,7 @@ from .const import (
     CONF_ADD_DEVICE,
     CONF_DPS_STRINGS,
     CONF_EDIT_DEVICE,
+    CONF_ENABLE_ADD_ENTITIES,
     CONF_ENABLE_DEBUG,
     CONF_LOCAL_KEY,
     CONF_MANUAL_DPS,
@@ -57,13 +57,13 @@ from .const import (
     CONF_STATE_ON,
     CONF_STEPSIZE_VALUE,
     CONF_USER_ID,
-    CONF_ENABLE_ADD_ENTITIES,
     DATA_CLOUD,
     DATA_DISCOVERY,
     DOMAIN,
     PLATFORMS,
 )
 from .discovery import discover
+
 
 _LOGGER = logging.getLogger(__name__)
 
