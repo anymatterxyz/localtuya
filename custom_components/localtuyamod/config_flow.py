@@ -3,6 +3,9 @@ import errno
 import logging
 import time
 from importlib import import_module
+import json
+import re
+from pathlib import Path
 
 import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.entity_registry as er
@@ -75,10 +78,27 @@ SELECTED_DEVICE = "selected_device"
 
 CUSTOM_DEVICE = "..."
 
+CONF_IMPORT_JSON = "import_json"
+CONF_IMPORT_FILE = "import_file"
+CONF_IMPORT_MODE = "import_mode"
+IMPORT_MODE_MERGE = "merge"
+IMPORT_MODE_REPLACE = "replace"
+
+IMPORT_JSON_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_IMPORT_FILE, default="devices_tuya.json"): cv.string,
+        vol.Required(CONF_IMPORT_MODE, default=IMPORT_MODE_MERGE): vol.In(
+            [IMPORT_MODE_MERGE, IMPORT_MODE_REPLACE]
+        ),
+    }
+)
+
+
 CONF_ACTIONS = {
     CONF_ADD_DEVICE: "Add a new device",
     CONF_EDIT_DEVICE: "Edit a device",
     CONF_SETUP_CLOUD: "Reconfigure Cloud API account",
+    CONF_ACTIONS[CONF_IMPORT_JSON] = "Импорт устройств из JSON",
 }
 
 CONFIGURE_SCHEMA = vol.Schema(
@@ -403,6 +423,66 @@ def dps_string_list(dps_data):
     """Return list of friendly DPS values."""
     return [f"{id} (value: {value})" for id, value in dps_data.items()]
 
+def _json_load_many(text: str) -> list:
+    """Loads one or many concatenated JSON objects (your file format)."""
+    dec = json.JSONDecoder()
+    i = 0
+    out = []
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            break
+        obj, j = dec.raw_decode(text, i)
+        out.append(obj)
+        i = j
+    return out
+
+
+def _extract_devices_map(obj) -> dict:
+    """Extracts devices mapping from supported payload shapes."""
+    if isinstance(obj, dict):
+        data = obj.get("data")
+        # preferred: HA entry export style: {"data": {"devices": {...}}}
+        if isinstance(data, dict) and isinstance(data.get(CONF_DEVICES), dict):
+            return data[CONF_DEVICES]
+        # also accept: {"devices": {...}}
+        if isinstance(obj.get(CONF_DEVICES), dict):
+            return obj[CONF_DEVICES]
+    return {}
+
+
+def _normalize_device_config(dev_id_key: str, dev: dict) -> dict | None:
+    """Ensures required keys exist and types are sane."""
+    if not isinstance(dev, dict):
+        return None
+
+    device_id = dev.get(CONF_DEVICE_ID) or dev_id_key
+    host = dev.get(CONF_HOST)
+    local_key = dev.get(CONF_LOCAL_KEY)
+
+    if not device_id or not host or not local_key:
+        return None
+
+    out = dev.copy()
+    out[CONF_DEVICE_ID] = device_id
+    out[CONF_HOST] = host
+    out[CONF_LOCAL_KEY] = local_key
+
+    # protocol version: keep as string, HA config flow expects string values
+    pv = out.get(CONF_PROTOCOL_VERSION, "3.3")
+    out[CONF_PROTOCOL_VERSION] = str(pv)
+
+    out.setdefault(CONF_FRIENDLY_NAME, dev.get(CONF_FRIENDLY_NAME) or device_id)
+    out.setdefault(CONF_ENABLE_DEBUG, False)
+
+    ents = out.get(CONF_ENTITIES)
+    if not isinstance(ents, list):
+        out[CONF_ENTITIES] = []
+
+    return out
+
+
 
 def gen_dps_strings():
     """Generate list of DPS values."""
@@ -569,6 +649,84 @@ class LocaltuyaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         """Initialize a new LocaltuyaConfigFlow."""
 
+    async def async_step_import_json(self, user_input=None):
+    errors = {}
+
+    async def _read_text(rel_path: str) -> str:
+        rel_path = (rel_path or "").strip()
+        if not rel_path:
+            raise ValueError("Empty path")
+
+        p = Path(rel_path)
+        # block absolute paths / traversal
+        if p.is_absolute() or ".." in p.parts:
+            raise ValueError("Path must be relative to /config")
+
+        full_path = self.hass.config.path(rel_path)
+        return await self.hass.async_add_executor_job(
+            lambda: Path(full_path).read_text(encoding="utf-8")
+        )
+
+    if user_input is not None:
+        try:
+            raw = await _read_text(user_input[CONF_IMPORT_FILE])
+            objs = _json_load_many(raw)
+
+            imported_raw = {}
+            for obj in objs:
+                imported_raw.update(_extract_devices_map(obj))
+
+            if not imported_raw:
+                raise ValueError("No devices found in JSON")
+
+            imported = {}
+            skipped = 0
+            for dev_id_key, dev in imported_raw.items():
+                norm = _normalize_device_config(dev_id_key, dev)
+                if norm is None:
+                    skipped += 1
+                    continue
+                imported[norm[CONF_DEVICE_ID]] = norm
+
+            if not imported:
+                raise ValueError("All devices were invalid (missing host/local_key/device_id?)")
+
+            new_data = self.config_entry.data.copy()
+            existing = dict(new_data.get(CONF_DEVICES, {}))
+
+            if user_input.get(CONF_IMPORT_MODE) == IMPORT_MODE_REPLACE:
+                existing = {}
+
+            existing.update(imported)
+            new_data[CONF_DEVICES] = existing
+            new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
+
+            self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+
+            _LOGGER.info(
+                "JSON import done: added/updated %s devices, skipped %s",
+                len(imported),
+                skipped,
+            )
+
+            self.hass.async_create_task(
+                self.hass.config_entries.async_reload(self.config_entry.entry_id)
+            )
+
+            return self.async_create_entry(title="", data={})
+
+        except Exception as ex:
+            _LOGGER.exception("JSON import failed: %s", ex)
+            errors["base"] = "unknown"  # будет текст из strings.json: "An unknown error occurred. See log..."
+            # да, это не идеально, но зато не лезем править переводы сейчас.
+
+    return self.async_show_form(
+        step_id="import_json",
+        data_schema=IMPORT_JSON_SCHEMA,
+        errors=errors,
+    )
+
+
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
         errors = {}
@@ -637,19 +795,23 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
 
 
     async def async_step_init(self, user_input=None):
-        """Manage basic options."""
-        # device_id = self.config_entry.data[CONF_DEVICE_ID]
         if user_input is not None:
-            if user_input.get(CONF_ACTION) == CONF_SETUP_CLOUD:
-                return await self.async_step_cloud_setup()
+
             if user_input.get(CONF_ACTION) == CONF_ADD_DEVICE:
                 return await self.async_step_add_device()
+
             if user_input.get(CONF_ACTION) == CONF_EDIT_DEVICE:
                 return await self.async_step_edit_device()
 
+            if user_input.get(CONF_ACTION) == CONF_REMOVE_DEVICE:
+                return await self.async_step_remove_device()
+
+            if user_input.get(CONF_ACTION) == CONF_IMPORT_JSON:
+                return await self.async_step_import_json()
+
         return self.async_show_form(
             step_id="init",
-            data_schema=CONFIGURE_SCHEMA,
+            data_schema=...
         )
 
     async def async_step_cloud_setup(self, user_input=None):
