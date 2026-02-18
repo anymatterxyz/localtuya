@@ -38,6 +38,7 @@ from .const import (
     CONF_ADD_DEVICE,
     CONF_DPS_STRINGS,
     CONF_EDIT_DEVICE,
+    CONF_REMOVE_DEVICE,
     CONF_ENABLE_ADD_ENTITIES,
     CONF_ENABLE_DEBUG,
     CONF_LOCAL_KEY,
@@ -99,6 +100,7 @@ CONF_ACTIONS = {
     CONF_EDIT_DEVICE: "Edit a device",
     CONF_SETUP_CLOUD: "Reconfigure Cloud API account",
     CONF_IMPORT_JSON: "Импорт устройств из JSON",
+    CONF_REMOVE_DEVICE: "Remove a device",
 }
 
 CONFIGURE_SCHEMA = vol.Schema(
